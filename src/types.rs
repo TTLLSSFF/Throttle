@@ -29,8 +29,6 @@ pub struct ProcessStats {
     pub pid: u32,
     /// Full executable path (may be empty if resolution failed).
     pub exe_path: String,
-    /// File name portion, for display.
-    pub name: String,
     /// Current download rate, bytes/sec.
     pub down_rate: u64,
     /// Current upload rate, bytes/sec.

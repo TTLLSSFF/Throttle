@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::appearance::Appearance;
 use crate::backend::rules::config_dir;
+use crate::i18n::Language;
 use crate::theme::{self, CustomTheme};
 
 /// User preferences for window, tray and theme. The tray flags default to
@@ -30,6 +31,9 @@ pub struct Settings {
     /// Colour theme id (see `theme`). Kept as stored even if unknown, so a
     /// newer build's palette survives a downgrade; `theme::apply` falls back.
     pub theme: String,
+    /// Interface language. `Auto` follows the Windows display language; an
+    /// unknown stored value also means `Auto`, so it can never break loading.
+    pub language: Language,
     /// Corner rounding, density, scale, fonts and accent overrides.
     pub appearance: Appearance,
     /// Table columns, plot style, always on top and compact mode.
@@ -149,6 +153,7 @@ impl Default for Settings {
             close_to_tray: false,
             start_minimized: false,
             theme: theme::DEFAULT_ID.to_string(),
+            language: Language::default(),
             appearance: Appearance::default(),
             view: View::default(),
             table: Table::default(),
@@ -217,6 +222,25 @@ mod tests {
                 ..Settings::default()
             }
         );
+    }
+
+    #[test]
+    fn language_round_trips_and_unknown_follows_system() {
+        let settings = Settings {
+            language: Language::Chinese,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains("\"language\":\"chinese\""));
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.language, Language::Chinese);
+
+        // A missing or unknown value means "follow the system" rather than an
+        // error, so a file from another build never breaks loading.
+        let back: Settings = serde_json::from_str(r#"{"language": "klingon"}"#).unwrap();
+        assert_eq!(back.language, Language::Auto);
+        let back: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(back.language, Language::Auto);
     }
 
     #[test]

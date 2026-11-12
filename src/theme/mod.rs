@@ -21,16 +21,32 @@ use std::borrow::Cow;
 use eframe::egui::{self, Color32, Theme, ThemePreference, Visuals};
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::t;
+
 /// Theme id used when `Settings::theme` is missing or unknown.
 pub const DEFAULT_ID: &str = "system";
 
-/// Built-in entries that are not palettes: `(id, menu label)`.
+/// Built-in entries that are not palettes: `(id, English menu label)`.
 /// `system` follows the OS, `light` and `dark` pin egui's stock visuals.
+/// Draw these through [`builtin_label`] so the labels follow the UI language.
 pub const BUILTIN: [(&str, &str); 3] = [
     (DEFAULT_ID, "Default (follow system)"),
     ("light", "Light"),
     ("dark", "Dark"),
 ];
+
+/// The Themes menu label of a built-in entry, in the active language.
+///
+/// `Light` and `Dark` name egui's own themes and stay verbatim; the default
+/// follows the operating system, so its label is translated. Unknown ids read
+/// as the default, matching [`apply`].
+pub fn builtin_label(id: &str) -> &'static str {
+    match id {
+        "light" => "Light",
+        "dark" => "Dark",
+        _ => t("Default (follow system)", "默认（跟随系统）"),
+    }
+}
 
 /// Accent colours used by the plots and the table, per theme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

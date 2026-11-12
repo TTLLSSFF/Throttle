@@ -3,6 +3,7 @@
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 
+use crate::i18n::t;
 use crate::settings::View;
 use crate::units::{GB, KB, MB, TB, axis_rate};
 
@@ -157,11 +158,15 @@ impl PlotHint {
     /// for as long as the view is zoomed or panned.
     pub fn text(self) -> Option<&'static str> {
         if self.moved {
-            Some("Double click the plot to reset the view")
+            Some(t(
+                "Double click the plot to reset the view",
+                "双击图表可重置视图",
+            ))
         } else if self.hovered {
-            Some(
+            Some(t(
                 "Scroll to zoom the time axis, drag to pan, double click to reset, right click for options",
-            )
+                "滚轮缩放时间轴，拖动平移，双击重置，右键查看选项",
+            ))
         } else {
             None
         }

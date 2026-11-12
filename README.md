@@ -44,6 +44,12 @@ https://github.com/user-attachments/assets/9413bec4-a48a-41c2-9e75-7e6207d80d4f
 - Optional colour themes (Themes menu): editor and community palettes, import
   of any editor colour theme JSON, Customise (corners, density, scale, fonts,
   accents) and View (columns, plot, always on top, compact). Stock by default.
+- Localized interface: English and Simplified Chinese, chosen in Settings >
+  Language or following the Windows display language. Known applications are
+  shown by a friendly name from a bundled dictionary (with each executable's
+  version resource as a fallback), so the table reads "谷歌浏览器" instead of
+  "chrome.exe"; the filter matches the friendly name, the file name and the
+  full path.
 - Filter box above the table (Ctrl+F) and an Active chip that hides idle
   processes. The window size and position, panel
   sizes, column widths and sort order are remembered across restarts.
@@ -58,10 +64,12 @@ https://github.com/user-attachments/assets/9413bec4-a48a-41c2-9e75-7e6207d80d4f
 
 Prebuilt Windows binaries are available on the
 [Releases page](https://github.com/FrancescoCoding/Throttle/releases).
-Grab the latest `Throttle-vX.Y.Z-windows-x64.zip`, extract it anywhere, and run
-`throttle.exe`. The WinDivert driver files are included in the zip, so no extra
-setup is needed. Windows will show a UAC prompt because the app needs
-administrator rights (see below).
+Grab the latest `Throttle-vX.Y.Z-windows-x64-setup.exe` and run it to install
+Throttle into `%ProgramFiles%\Throttle`, or use the portable
+`Throttle-vX.Y.Z-windows-x64.zip`: extract it anywhere and run `throttle.exe`.
+The WinDivert driver files are included either way, so no extra setup is
+needed. Windows will show a UAC prompt because the app needs administrator
+rights (see below).
 
 ## Screenshots
 
@@ -112,6 +120,18 @@ Then launch it:
 ```powershell
 target\release\throttle.exe
 ```
+
+### Installer
+
+The setup executable is built with NSIS 3. Stage the release binary and the two
+WinDivert files, then compile `installer/Throttle.nsi`:
+
+```bash
+./installer/build-installer.sh
+```
+
+This writes `dist/Throttle-v<version>-windows-x64-setup.exe` together with its
+`.sha256`. See [installer/README.md](installer/README.md) for details.
 
 ## Administrator requirement
 

@@ -6,6 +6,7 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::appnames;
 use crate::plot::{self, PlotHint};
 use crossbeam_channel::{Receiver, Sender};
 use eframe::egui;
@@ -16,6 +17,7 @@ use crate::tray::{self, TrayAction, TrayRule};
 
 use crate::backend::rules;
 use crate::backend::synthetic::{is_shapable, is_system};
+use crate::i18n::{self, count, t, tf};
 use crate::settings::{self, Settings, SortColumn, View};
 use crate::types::{Command, ProcessStats, Rule, Snapshot};
 use crate::units::{GB, KB, MB, humanize_bytes, humanize_rate, settle};
@@ -26,12 +28,13 @@ use crate::{appearance, autostart, icon, single_instance, theme};
 /// View menu changes it through `View::history_secs`.
 const TOTAL_HISTORY_LEN: usize = 120;
 
-/// Header plot history choices in the View menu: `(seconds, label)`.
-const HISTORY_CHOICES: [(usize, &str); 4] = [
-    (60, "1 minute"),
-    (120, "2 minutes"),
-    (300, "5 minutes"),
-    (600, "10 minutes"),
+/// Header plot history choices in the View menu:
+/// `(seconds, (English label, Chinese label))`.
+const HISTORY_CHOICES: [(usize, (&str, &str)); 4] = [
+    (60, ("1 minute", "1 分钟")),
+    (120, ("2 minutes", "2 分钟")),
+    (300, ("5 minutes", "5 分钟")),
+    (600, ("10 minutes", "10 分钟")),
 ];
 
 /// Plot line width choices in the View menu: `(points, label)`.
@@ -128,14 +131,22 @@ pub(crate) fn rule_summary(rule: Option<&Rule>) -> String {
         return "-".to_string();
     };
     let summary = if r.blocked {
-        "BLOCKED".to_string()
+        t("BLOCKED", "已屏蔽").to_string()
     } else {
         let mut parts = Vec::new();
         if let Some(d) = r.down_limit {
-            parts.push(format!("Dn {}", humanize_rate(d)));
+            parts.push(tf(
+                "Dn {rate}",
+                "下行 {rate}",
+                &[("rate", &humanize_rate(d))],
+            ));
         }
         if let Some(u) = r.up_limit {
-            parts.push(format!("Up {}", humanize_rate(u)));
+            parts.push(tf(
+                "Up {rate}",
+                "上行 {rate}",
+                &[("rate", &humanize_rate(u))],
+            ));
         }
         if parts.is_empty() {
             return "-".to_string();
@@ -143,7 +154,11 @@ pub(crate) fn rule_summary(rule: Option<&Rule>) -> String {
         parts.join("  ")
     };
     if r.disabled {
-        format!("Off: {summary}")
+        tf(
+            "Off: {summary}",
+            "已停用：{summary}",
+            &[("summary", &summary)],
+        )
     } else {
         summary
     }
@@ -155,12 +170,11 @@ fn is_active(stats: &ProcessStats) -> bool {
 }
 
 /// Whether `stats` matches the filter box text: a case-insensitive
-/// substring of the process name or its path. Blank matches everything.
+/// substring of its friendly name, executable file name or full path, so
+/// searching "chrome" also finds the “Google Chrome” row. Blank matches everything.
 fn matches_filter(stats: &ProcessStats, filter: &str) -> bool {
     let needle = filter.trim().to_lowercase();
-    needle.is_empty()
-        || stats.name.to_lowercase().contains(&needle)
-        || stats.exe_path.to_lowercase().contains(&needle)
+    needle.is_empty() || appnames::filter_haystack(&stats.exe_path).contains(&needle)
 }
 
 // ---------------------------------------------------------------------------
@@ -192,13 +206,13 @@ impl TableColumn {
 
     fn label(self) -> &'static str {
         match self {
-            TableColumn::Name => "Process",
-            TableColumn::Flows => "Flows",
-            TableColumn::Down => "Down",
-            TableColumn::Up => "Up",
-            TableColumn::DownTotal => "Total down",
-            TableColumn::UpTotal => "Total up",
-            TableColumn::Rule => "Rule",
+            TableColumn::Name => t("Process", "进程"),
+            TableColumn::Flows => t("Flows", "连接数"),
+            TableColumn::Down => t("Down", "下载"),
+            TableColumn::Up => t("Up", "上传"),
+            TableColumn::DownTotal => t("Total down", "累计下载"),
+            TableColumn::UpTotal => t("Total up", "累计上传"),
+            TableColumn::Rule => t("Rule", "规则"),
         }
     }
 
@@ -246,8 +260,10 @@ impl TableColumn {
 /// filled area, line width and, for the header plot, its history length.
 /// Returns whether anything changed.
 fn plot_options(ui: &mut egui::Ui, view: &mut View, header: bool) -> bool {
-    let mut changed = ui.checkbox(&mut view.plot_fill, "Filled area").changed();
-    ui.menu_button("Line width", |ui| {
+    let mut changed = ui
+        .checkbox(&mut view.plot_fill, t("Filled area", "填充区域"))
+        .changed();
+    ui.menu_button(t("Line width", "线宽"), |ui| {
         for (width, label) in LINE_WIDTH_CHOICES {
             changed |= ui
                 .radio_value(&mut view.plot_line_width, width, label)
@@ -255,10 +271,10 @@ fn plot_options(ui: &mut egui::Ui, view: &mut View, header: bool) -> bool {
         }
     });
     if header {
-        ui.menu_button("Header plot history", |ui| {
-            for (secs, label) in HISTORY_CHOICES {
+        ui.menu_button(t("Header plot history", "顶部图表历史"), |ui| {
+            for (secs, (english, chinese)) in HISTORY_CHOICES {
                 changed |= ui
-                    .radio_value(&mut view.history_secs, secs, label)
+                    .radio_value(&mut view.history_secs, secs, t(english, chinese))
                     .changed();
             }
         });
@@ -340,6 +356,9 @@ pub struct ThrottleApp {
     tray_rules: Vec<TrayRule>,
     /// The tray tooltip currently set, to update it only when the totals change.
     tray_tooltip: String,
+    /// The tray menu reads the interface language, so a language change rebuilds
+    /// it on the next refresh even when the rules it lists are unchanged.
+    tray_menu_dirty: bool,
     /// The window is hidden to the tray (no taskbar button).
     hidden: bool,
     /// Whether the window was minimised last frame, to catch the moment it is.
@@ -371,6 +390,10 @@ impl ThrottleApp {
         settings: Settings,
         start_hidden: bool,
     ) -> Self {
+        // Chinese labels and application names need a CJK fallback from the
+        // first frame; `appearance` only rebuilds the fonts when its own font
+        // preference changes.
+        crate::fonts::install(&cc.egui_ctx);
         let (tray_tx, tray_rx) = crossbeam_channel::unbounded();
         // The tray starts with the stock icon; `restyle` below recolours it
         // when the theme's accents differ from the stock ones.
@@ -412,6 +435,7 @@ impl ThrottleApp {
             tray_rx,
             tray_rules: Vec::new(),
             tray_tooltip: String::new(),
+            tray_menu_dirty: false,
             hidden: false,
             was_minimized: false,
             start_hidden: start_hidden.then(|| Instant::now() + START_HIDDEN_WAIT),
@@ -474,9 +498,10 @@ impl ThrottleApp {
         }
 
         let rules = tray::rules(snap);
-        if rules != self.tray_rules {
+        if rules != self.tray_rules || self.tray_menu_dirty {
             tray.set_menu(Some(Box::new(tray::menu(&rules))));
             self.tray_rules = rules;
+            self.tray_menu_dirty = false;
             ctx.request_repaint();
         }
     }
@@ -544,7 +569,12 @@ impl ThrottleApp {
             }
             Err(e) => {
                 tracing::warn!("failed to update the startup task: {e:#}");
-                self.autostart_error = Some(format!("Could not update the startup task: {e:#}"));
+                let error = format!("{e:#}");
+                self.autostart_error = Some(tf(
+                    "Could not update the startup task: {error}",
+                    "无法更新开机启动任务：{error}",
+                    &[("error", &error)],
+                ));
             }
         }
     }
@@ -670,63 +700,67 @@ impl ThrottleApp {
     fn draw_menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("menu_bar").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("Import theme...").clicked() {
+                ui.menu_button(t("File", "文件"), |ui| {
+                    if ui.button(t("Import theme...", "导入主题…")).clicked() {
                         ui.close();
                         self.import_theme(ui.ctx());
                     }
                     ui.separator();
-                    if ui.button("Open rules file").clicked() {
+                    if ui.button(t("Open rules file", "打开规则文件")).clicked() {
                         open_path(&rules::rules_path());
                         ui.close();
                     }
-                    if ui.button("Open log file").clicked() {
+                    if ui.button(t("Open log file", "打开日志文件")).clicked() {
                         open_path(&rules::config_dir().join("throttle.log"));
                         ui.close();
                     }
-                    if ui.button("Open data folder").clicked() {
+                    if ui.button(t("Open data folder", "打开数据文件夹")).clicked() {
                         open_path(&rules::config_dir());
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("Exit").clicked() {
+                    if ui.button(t("Exit", "退出")).clicked() {
                         self.exit(ui.ctx());
                         ui.close();
                     }
                 });
-                ui.menu_button("Settings", |ui| self.draw_settings_menu(ui));
+                ui.menu_button(t("Settings", "设置"), |ui| self.draw_settings_menu(ui));
                 // Menus close on any click by default; this one stays open
                 // so palettes can be cycled through, and its submenus inherit
                 // that. Surprise me and Customise close it explicitly.
                 let stay_open = egui::containers::menu::MenuConfig::new()
                     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-                egui::containers::menu::MenuButton::new("Themes")
+                egui::containers::menu::MenuButton::new(t("Themes", "主题"))
                     .config(stay_open)
                     .ui(ui, |ui| self.draw_themes_menu(ui));
-                ui.menu_button("View", |ui| self.draw_view_menu(ui));
-                ui.menu_button("Help", |ui| {
-                    if ui.button("Documentation").clicked() {
+                ui.menu_button(t("View", "视图"), |ui| self.draw_view_menu(ui));
+                ui.menu_button(t("Help", "帮助"), |ui| {
+                    if ui.button(t("Documentation", "文档")).clicked() {
                         open_url(ui.ctx(), &format!("{REPO_URL}#readme"));
                         ui.close();
                     }
-                    if ui.button("Report issue").clicked() {
+                    if ui.button(t("Report issue", "报告问题")).clicked() {
                         open_url(ui.ctx(), &format!("{REPO_URL}/issues/new"));
                         ui.close();
                     }
                     let update_label = match &self.update {
-                        Some(u) => format!("Update available: v{}\u{2026}", u.version),
-                        None => "Check for updates\u{2026}".to_string(),
+                        Some(u) => tf(
+                            "Update available: v{version}\u{2026}",
+                            "有可用更新：v{version}…",
+                            &[("version", &u.version)],
+                        ),
+                        None => t("Check for updates\u{2026}", "检查更新…").to_string(),
                     };
                     if ui.button(update_label).clicked() {
                         open_url(ui.ctx(), &format!("{REPO_URL}/releases/latest"));
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("View license").clicked() {
+                    if ui.button(t("View license", "查看许可证")).clicked() {
                         open_url(ui.ctx(), &format!("{REPO_URL}/blob/main/LICENSE"));
                         ui.close();
                     }
-                    if ui.button("Third party notices").clicked() {
+                    if ui.button(t("Third party notices", "第三方声明")).clicked() {
                         open_url(
                             ui.ctx(),
                             &format!("{REPO_URL}/blob/main/THIRD_PARTY_NOTICES.md"),
@@ -734,11 +768,11 @@ impl ThrottleApp {
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("Buy me a coffee").clicked() {
+                    if ui.button(t("Buy me a coffee", "请我喝杯咖啡")).clicked() {
                         open_url(ui.ctx(), SUPPORT_URL);
                         ui.close();
                     }
-                    if ui.button("About Throttle").clicked() {
+                    if ui.button(t("About Throttle", "关于 Throttle")).clicked() {
                         self.about_open = true;
                         ui.close();
                     }
@@ -751,20 +785,38 @@ impl ThrottleApp {
         let mut changed = false;
         ui.add_enabled_ui(self.tray.is_some(), |ui| {
             changed |= ui
-                .checkbox(&mut self.settings.minimize_to_tray, "Minimise to tray")
-                .on_hover_text("Minimising hides Throttle to the tray instead of the taskbar.")
+                .checkbox(
+                    &mut self.settings.minimize_to_tray,
+                    t("Minimise to tray", "最小化到托盘"),
+                )
+                .on_hover_text(t(
+                    "Minimising hides Throttle to the tray instead of the taskbar.",
+                    "最小化时把 Throttle 收进系统托盘，而不是留在任务栏。",
+                ))
                 .changed();
             changed |= ui
-                .checkbox(&mut self.settings.close_to_tray, "Close to tray")
-                .on_hover_text("The X button hides Throttle to the tray. File > Exit still quits.")
+                .checkbox(
+                    &mut self.settings.close_to_tray,
+                    t("Close to tray", "关闭到托盘"),
+                )
+                .on_hover_text(t(
+                    "The X button hides Throttle to the tray. File > Exit still quits.",
+                    "点击 X 会把 Throttle 收进系统托盘；仍可通过“文件 > 退出”彻底退出。",
+                ))
                 .changed();
             changed |= ui
-                .checkbox(&mut self.settings.start_minimized, "Start minimised")
-                .on_hover_text("Open in the tray instead of a window.")
+                .checkbox(
+                    &mut self.settings.start_minimized,
+                    t("Start minimised", "启动时最小化"),
+                )
+                .on_hover_text(t(
+                    "Open in the tray instead of a window.",
+                    "启动时收进系统托盘，不打开窗口。",
+                ))
                 .changed();
         })
         .response
-        .on_disabled_hover_text("The system tray is unavailable.");
+        .on_disabled_hover_text(t("The system tray is unavailable.", "系统托盘不可用。"));
         if changed {
             self.save_settings();
         }
@@ -774,9 +826,12 @@ impl ThrottleApp {
         let toggled = ui
             .add_enabled(
                 self.autostart.is_some(),
-                egui::Checkbox::new(&mut autostart, "Launch at startup"),
+                egui::Checkbox::new(&mut autostart, t("Launch at startup", "开机启动")),
             )
-            .on_hover_text("Start Throttle in the tray when you sign in to Windows.")
+            .on_hover_text(t(
+                "Start Throttle in the tray when you sign in to Windows.",
+                "登录 Windows 后自动在系统托盘中启动 Throttle。",
+            ))
             .changed();
         if toggled {
             self.set_autostart(autostart);
@@ -784,35 +839,60 @@ impl ThrottleApp {
         if let Some(e) = &self.autostart_error {
             ui.label(egui::RichText::new(e).small().color(self.accents.block));
         }
+
+        ui.separator();
+        // The language switch applies immediately and is remembered, so the
+        // next start opens in the chosen language.
+        let mut language = self.settings.language;
+        ui.menu_button(t("Language", "语言"), |ui| {
+            for option in i18n::Language::ALL {
+                ui.radio_value(&mut language, option, option.label());
+            }
+        });
+        if language != self.settings.language {
+            self.settings.language = language;
+            i18n::set_language(language);
+            // The tray menu and tooltip carry translated text; rebuild them
+            // rather than wait for the rule list to change.
+            self.tray_menu_dirty = true;
+            self.tray_tooltip.clear();
+            self.save_settings();
+        }
     }
 
     fn draw_themes_menu(&mut self, ui: &mut egui::Ui) {
-        for (id, label) in theme::BUILTIN {
-            self.theme_row(ui, id, label, None);
+        for (id, _) in theme::BUILTIN {
+            self.theme_row(ui, id, theme::builtin_label(id), None);
         }
         ui.separator();
         type InGroup = fn(&theme::Palette) -> bool;
-        let groups: [(&str, InGroup); 3] = [
-            ("Editor", |p| p.source == theme::Source::Editor),
-            ("Dark", |p| p.source == theme::Source::Community && p.dark),
-            ("Light", |p| p.source == theme::Source::Community && !p.dark),
+        let groups: [((&'static str, &'static str), InGroup); 3] = [
+            (("Editor", "编辑器"), |p| {
+                p.source == theme::Source::Editor
+            }),
+            (("Dark", "深色"), |p| {
+                p.source == theme::Source::Community && p.dark
+            }),
+            (("Light", "浅色"), |p| {
+                p.source == theme::Source::Community && !p.dark
+            }),
         ];
-        for (title, in_group) in groups {
-            ui.menu_button(title, |ui| {
+        for ((english, chinese), in_group) in groups {
+            ui.menu_button(t(english, chinese), |ui| {
                 for palette in theme::builtin().filter(|p| in_group(p)) {
                     self.theme_row(ui, &palette.id, &palette.label, Some(palette));
                 }
             });
         }
         if !self.custom_palettes.is_empty() {
-            ui.menu_button("Imported", |ui| self.draw_imported_menu(ui));
+            ui.menu_button(t("Imported", "已导入"), |ui| self.draw_imported_menu(ui));
         }
         ui.separator();
-        if ui.button("Surprise me").clicked() {
+        if ui.button(t("Surprise me", "随机换一个")).clicked() {
             self.surprise_me(ui.ctx());
             ui.close();
         }
-        if ui.button("Customise...").clicked() {
+        if ui.button(t("Customise...", "自定义…")).clicked() {
             self.customise_open = true;
             ui.close();
         }
@@ -827,7 +907,7 @@ impl ThrottleApp {
             self.theme_row(ui, &palette.id, &palette.label, Some(palette));
         }
         ui.separator();
-        ui.menu_button("Remove", |ui| {
+        ui.menu_button(t("Remove", "移除"), |ui| {
             for palette in &custom {
                 if ui.button(palette.label.as_ref()).clicked() {
                     self.remove_custom_theme(ui.ctx(), &palette.id);
@@ -885,7 +965,7 @@ impl ThrottleApp {
     /// imported palettes and switch to it. A failure opens the error window.
     fn import_theme(&mut self, ctx: &egui::Context) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Colour theme", &["json"])
+            .add_filter(t("Colour theme", "配色主题"), &["json"])
             .pick_file()
         else {
             return;
@@ -932,30 +1012,35 @@ impl ThrottleApp {
     fn draw_view_menu(&mut self, ui: &mut egui::Ui) {
         let mut changed = false;
         let view = &mut self.settings.view;
-        ui.menu_button("Columns", |ui| {
-            for (show, label) in [
-                (&mut view.show_flows, "Flows"),
-                (&mut view.show_down, "Down"),
-                (&mut view.show_up, "Up"),
-                (&mut view.show_down_total, "Total down"),
-                (&mut view.show_up_total, "Total up"),
-                (&mut view.show_rule, "Rule"),
+        ui.menu_button(t("Columns", "列"), |ui| {
+            for (show, (english, chinese)) in [
+                (&mut view.show_flows, ("Flows", "连接数")),
+                (&mut view.show_down, ("Down", "下载")),
+                (&mut view.show_up, ("Up", "上传")),
+                (&mut view.show_down_total, ("Total down", "累计下载")),
+                (&mut view.show_up_total, ("Total up", "累计上传")),
+                (&mut view.show_rule, ("Rule", "规则")),
             ] {
-                changed |= ui.checkbox(show, label).changed();
+                changed |= ui.checkbox(show, t(english, chinese)).changed();
             }
         });
-        ui.menu_button("Plot", |ui| {
+        ui.menu_button(t("Plot", "图表"), |ui| {
             changed |= plot_options(ui, view, true);
         });
         ui.separator();
         let on_top_changed = ui
-            .checkbox(&mut view.always_on_top, "Always on top")
+            .checkbox(&mut view.always_on_top, t("Always on top", "总在最前"))
             .changed();
         changed |= on_top_changed;
         changed |= ui
-            .checkbox(&mut view.compact, "Compact (hide header plot)")
+            .checkbox(
+                &mut view.compact,
+                t("Compact (hide header plot)", "紧凑模式（隐藏顶部图表）"),
+            )
             .changed();
-        changed |= ui.checkbox(&mut view.show_filter, "Filter box").changed();
+        changed |= ui
+            .checkbox(&mut view.show_filter, t("Filter box", "筛选框"))
+            .changed();
         if on_top_changed {
             self.send_window_level(ui.ctx());
         }
@@ -969,7 +1054,7 @@ impl ThrottleApp {
     /// plot also offers its history length; the detail plot's is fixed.
     fn plot_context_menu(&mut self, response: &egui::Response, id: &'static str, header: bool) {
         response.context_menu(|ui| {
-            if ui.button("Reset view").clicked() {
+            if ui.button(t("Reset view", "重置视图")).clicked() {
                 plot::reset_view(ui.ctx(), id);
                 ui.close();
             }
@@ -986,7 +1071,7 @@ impl ThrottleApp {
             return;
         }
         let mut open = true;
-        let changed = egui::Window::new("Customise")
+        let changed = egui::Window::new(t("Customise", "自定义"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -1009,16 +1094,19 @@ impl ThrottleApp {
         };
         let mut open = true;
         let mut close = false;
-        egui::Window::new("Import failed")
+        egui::Window::new(t("Import failed", "导入失败"))
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.label("The colour theme could not be imported.");
+                ui.label(t(
+                    "The colour theme could not be imported.",
+                    "无法导入该配色主题。",
+                ));
                 ui.label(egui::RichText::new(message).color(self.accents.block));
                 ui.add_space(4.0);
-                if ui.button("Close").clicked() {
+                if ui.button(t("Close", "关闭")).clicked() {
                     close = true;
                 }
             });
@@ -1043,7 +1131,13 @@ impl ThrottleApp {
                 std::process::Command::new(&exe)
                     .args(["--wait-pid", &std::process::id().to_string()])
                     .spawn()
-                    .map_err(|e| format!("could not start the new version: {e}"))
+                    .map_err(|e| {
+                        tf(
+                            "could not start the new version: {error}",
+                            "无法启动新版本：{error}",
+                            &[("error", &e.to_string())],
+                        )
+                    })
             });
             self.update_install = match relaunched {
                 Ok(_) => {
@@ -1067,26 +1161,31 @@ impl ThrottleApp {
         egui::Panel::top("update_banner").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(format!(
-                        "Throttle v{} is available (you have v{APP_VERSION}).",
-                        update.version
+                    egui::RichText::new(tf(
+                        "Throttle v{version} is available (you have v{current}).",
+                        "Throttle v{version} 可用（当前版本 v{current}）。",
+                        &[("version", &update.version), ("current", APP_VERSION)],
                     ))
                     .strong(),
                 );
                 if let UpdateInstall::Running(_) = self.update_install {
                     ui.spinner();
-                    ui.label("Downloading update\u{2026}");
+                    ui.label(t("Downloading update\u{2026}", "正在下载更新…"));
                     return;
                 }
                 if let UpdateInstall::Failed(e) = &self.update_install {
                     ui.label(
-                        egui::RichText::new(format!("Update failed: {e}"))
-                            .color(self.accents.block),
+                        egui::RichText::new(tf(
+                            "Update failed: {error}",
+                            "更新失败：{error}",
+                            &[("error", e)],
+                        ))
+                        .color(self.accents.block),
                     );
                 }
                 match &update.asset_url {
                     Some(asset_url) => {
-                        if ui.button("Update and restart").clicked() {
+                        if ui.button(t("Update and restart", "更新并重启")).clicked() {
                             let (tx, rx) = crossbeam_channel::bounded(1);
                             let asset_url = asset_url.clone();
                             std::thread::spawn(move || {
@@ -1096,17 +1195,17 @@ impl ThrottleApp {
                             });
                             self.update_install = UpdateInstall::Running(rx);
                         }
-                        if ui.button("Release notes").clicked() {
+                        if ui.button(t("Release notes", "发行说明")).clicked() {
                             open_url(ui.ctx(), &release_page);
                         }
                     }
                     None => {
-                        if ui.button("Download").clicked() {
+                        if ui.button(t("Download", "下载")).clicked() {
                             open_url(ui.ctx(), &release_page);
                         }
                     }
                 }
-                if ui.button("Dismiss").clicked() {
+                if ui.button(t("Dismiss", "忽略")).clicked() {
                     self.update_dismissed = true;
                 }
             });
@@ -1118,7 +1217,7 @@ impl ThrottleApp {
             return;
         }
         let mut open = true;
-        egui::Window::new("About Throttle")
+        egui::Window::new(t("About Throttle", "关于 Throttle"))
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
@@ -1127,23 +1226,33 @@ impl ThrottleApp {
                 ui.vertical_centered(|ui| {
                     ui.add_space(6.0);
                     ui.heading("Throttle");
-                    ui.label(egui::RichText::new(format!("Version {APP_VERSION}")).strong());
+                    ui.label(
+                        egui::RichText::new(tf(
+                            "Version {version}",
+                            "版本 {version}",
+                            &[("version", APP_VERSION)],
+                        ))
+                        .strong(),
+                    );
                     ui.add_space(4.0);
-                    ui.label(env!("CARGO_PKG_DESCRIPTION"));
+                    ui.label(t(
+                        env!("CARGO_PKG_DESCRIPTION"),
+                        "免费开源的 Windows 按进程带宽监控与限速工具",
+                    ));
                     ui.add_space(8.0);
                 });
                 ui.separator();
                 egui::Grid::new("about_grid").num_columns(2).show(ui, |ui| {
-                    ui.label("Packet driver");
+                    ui.label(t("Packet driver", "数据包驱动"));
                     ui.label(format!("WinDivert {WINDIVERT_VERSION}"));
                     ui.end_row();
-                    ui.label("UI toolkit");
+                    ui.label(t("UI toolkit", "UI 工具包"));
                     ui.label("egui / eframe");
                     ui.end_row();
-                    ui.label("License");
+                    ui.label(t("License", "许可证"));
                     ui.label(env!("CARGO_PKG_LICENSE"));
                     ui.end_row();
-                    ui.label("Data folder");
+                    ui.label(t("Data folder", "数据文件夹"));
                     ui.label(
                         egui::RichText::new(rules::config_dir().display().to_string())
                             .weak()
@@ -1154,9 +1263,9 @@ impl ThrottleApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.hyperlink_to("GitHub", REPO_URL);
-                    ui.hyperlink_to("Releases", format!("{REPO_URL}/releases"));
-                    ui.hyperlink_to("Report issue", format!("{REPO_URL}/issues"));
-                    ui.hyperlink_to("Buy me a coffee", SUPPORT_URL);
+                    ui.hyperlink_to(t("Releases", "版本发布"), format!("{REPO_URL}/releases"));
+                    ui.hyperlink_to(t("Report issue", "报告问题"), format!("{REPO_URL}/issues"));
+                    ui.hyperlink_to(t("Buy me a coffee", "请我喝杯咖啡"), SUPPORT_URL);
                 });
                 ui.add_space(4.0);
                 ui.label(
@@ -1184,20 +1293,33 @@ impl ThrottleApp {
             ui.separator();
             ui.label(
                 self.numeric(
-                    egui::RichText::new(format!("Down {}", humanize_rate(snap.total_down_rate)))
-                        .color(self.accents.down)
-                        .strong(),
+                    egui::RichText::new(tf(
+                        "Down {rate}",
+                        "下载 {rate}",
+                        &[("rate", &humanize_rate(snap.total_down_rate))],
+                    ))
+                    .color(self.accents.down)
+                    .strong(),
                 ),
             );
             ui.label(
                 self.numeric(
-                    egui::RichText::new(format!("Up {}", humanize_rate(snap.total_up_rate)))
-                        .color(self.accents.up)
-                        .strong(),
+                    egui::RichText::new(tf(
+                        "Up {rate}",
+                        "上传 {rate}",
+                        &[("rate", &humanize_rate(snap.total_up_rate))],
+                    ))
+                    .color(self.accents.up)
+                    .strong(),
                 ),
             );
             ui.separator();
-            ui.label(format!("{} processes", snap.processes.len()));
+            ui.label(count(
+                snap.processes.len(),
+                "process",
+                "processes",
+                "个进程",
+            ));
             if let Some(text) = self.total_plot_hint.text() {
                 ui.separator();
                 ui.weak(text);
@@ -1234,13 +1356,13 @@ impl ThrottleApp {
                     let view = &self.settings.view;
                     pui.line(plot::plot_line(
                         view,
-                        "Down",
+                        t("Down", "下载"),
                         &self.total_down_hist,
                         self.accents.down,
                     ));
                     pui.line(plot::plot_line(
                         view,
-                        "Up",
+                        t("Up", "上传"),
                         &self.total_up_hist,
                         self.accents.up,
                     ));
@@ -1269,9 +1391,12 @@ impl ThrottleApp {
                     ui.add_space(12.0);
                     ui.vertical_centered(|ui| {
                         ui.label(
-                            egui::RichText::new("Select a process to see details")
-                                .weak()
-                                .italics(),
+                            egui::RichText::new(t(
+                                "Select a process to see details",
+                                "选择一个进程以查看详情",
+                            ))
+                            .weak()
+                            .italics(),
                         );
                     });
                     return;
@@ -1283,38 +1408,38 @@ impl ThrottleApp {
                 egui::Grid::new("detail_grid")
                     .num_columns(2)
                     .show(ui, |ui| {
-                        ui.label("PID");
+                        ui.label(t("PID", "PID"));
                         ui.label(stats.pid.to_string());
                         ui.end_row();
-                        ui.label("Flows");
+                        ui.label(t("Flows", "连接数"));
                         ui.label(stats.flow_count.to_string());
                         ui.end_row();
-                        ui.label("Download");
+                        ui.label(t("Download", "下载"));
                         ui.label(
                             egui::RichText::new(humanize_rate(stats.down_rate))
                                 .color(self.accents.down),
                         );
                         ui.end_row();
-                        ui.label("Upload");
+                        ui.label(t("Upload", "上传"));
                         ui.label(
                             egui::RichText::new(humanize_rate(stats.up_rate))
                                 .color(self.accents.up),
                         );
                         ui.end_row();
-                        ui.label("Total down");
+                        ui.label(t("Total down", "累计下载"));
                         ui.label(humanize_bytes(stats.down_total));
                         ui.end_row();
-                        ui.label("Total up");
+                        ui.label(t("Total up", "累计上传"));
                         ui.label(humanize_bytes(stats.up_total));
                         ui.end_row();
-                        ui.label("Rule");
+                        ui.label(t("Rule", "规则"));
                         ui.label(rule_summary(snap.rules.get(&key)));
                         ui.end_row();
                     });
 
                 ui.separator();
                 ui.horizontal(|ui| {
-                    ui.label("History (per second)");
+                    ui.label(t("History (per second)", "历史（每秒）"));
                     // Truncated: a side panel grows to fit its content, and
                     // the hint must not widen it whenever the plot is hovered.
                     if let Some(text) = self.detail_plot_hint.text() {
@@ -1328,8 +1453,13 @@ impl ThrottleApp {
                     .height(160.0)
                     .show(ui, |pui| {
                         let view = &self.settings.view;
-                        pui.line(plot::plot_line(view, "Down", &down, self.accents.down));
-                        pui.line(plot::plot_line(view, "Up", &up, self.accents.up));
+                        pui.line(plot::plot_line(
+                            view,
+                            t("Down", "下载"),
+                            &down,
+                            self.accents.down,
+                        ));
+                        pui.line(plot::plot_line(view, t("Up", "上传"), &up, self.accents.up));
                         plot::plot_navigation(pui);
                         pui.auto_bounds()
                     });
@@ -1357,7 +1487,9 @@ impl ThrottleApp {
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         ui.set_width(text_width);
-                        ui.heading(&stats.name);
+                        ui.heading(appnames::display(&stats.exe_path));
+                        // The friendly name can hide the real executable, so the
+                        // path stays visible right below it.
                         ui.label(egui::RichText::new(&stats.exe_path).weak().small());
                     },
                 )
@@ -1366,8 +1498,12 @@ impl ThrottleApp {
             if let Some(folder) = folder {
                 let side = text.height().clamp(24.0, FOLDER_BUTTON_WIDTH);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let response =
-                        folder_button(ui, side).on_hover_text(format!("Open {}", folder.display()));
+                    let folder_text = folder.display().to_string();
+                    let response = folder_button(ui, side).on_hover_text(tf(
+                        "Open {folder}",
+                        "打开 {folder}",
+                        &[("folder", &folder_text)],
+                    ));
                     if response.clicked() {
                         open_path(folder);
                     }
@@ -1402,18 +1538,28 @@ impl ThrottleApp {
 
         let sort_column = self.settings.table.sort;
         let sort_desc = self.settings.table.descending;
-        rows.sort_by(|a, b| {
-            let (a, b) = (&a.1, &b.1);
-            let ord = match sort_column {
-                SortColumn::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-                SortColumn::Flows => a.flow_count.cmp(&b.flow_count),
-                SortColumn::Down => a.down_rate.cmp(&b.down_rate),
-                SortColumn::Up => a.up_rate.cmp(&b.up_rate),
-                SortColumn::DownTotal => a.down_total.cmp(&b.down_total),
-                SortColumn::UpTotal => a.up_total.cmp(&b.up_total),
-            };
-            if sort_desc { ord.reverse() } else { ord }
-        });
+        if sort_column == SortColumn::Name {
+            // Resolve the friendly name once per row: a comparator would run a
+            // dictionary lookup and a version-resource probe for every pair.
+            rows.sort_by_cached_key(|(_, s)| appnames::display(&s.exe_path).to_lowercase());
+            if sort_desc {
+                rows.reverse();
+            }
+        } else {
+            rows.sort_by(|a, b| {
+                let (a, b) = (&a.1, &b.1);
+                let ord = match sort_column {
+                    SortColumn::Flows => a.flow_count.cmp(&b.flow_count),
+                    SortColumn::Down => a.down_rate.cmp(&b.down_rate),
+                    SortColumn::Up => a.up_rate.cmp(&b.up_rate),
+                    SortColumn::DownTotal => a.down_total.cmp(&b.down_total),
+                    SortColumn::UpTotal => a.up_total.cmp(&b.up_total),
+                    // Handled by the cached-key branch above; keeps the match total.
+                    SortColumn::Name => std::cmp::Ordering::Equal,
+                };
+                if sort_desc { ord.reverse() } else { ord }
+            });
+        }
 
         let row_height = self.settings.appearance.density.row_height();
 
@@ -1481,7 +1627,8 @@ impl ThrottleApp {
                         if resp.clicked() || resp.secondary_clicked() {
                             self.selected = Some(key.clone());
                         }
-                        self.row_context_menu(&resp, key, &stats.name);
+                        let name = appnames::display(&stats.exe_path);
+                        self.row_context_menu(&resp, key, &name);
                     });
                 });
             // Not during a sizing pass nor while a drag may be under way.
@@ -1507,7 +1654,7 @@ impl ThrottleApp {
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
                     .id(id)
-                    .hint_text("Filter processes (Ctrl+F)")
+                    .hint_text(t("Filter processes (Ctrl+F)", "筛选进程（Ctrl+F）"))
                     .margin(egui::Margin::symmetric(8, 5))
                     .desired_width(220.0),
             );
@@ -1515,22 +1662,31 @@ impl ThrottleApp {
                 self.focus_filter = false;
                 response.request_focus();
             }
-            if !self.filter.is_empty() && ui.small_button("Clear").clicked() {
+            if !self.filter.is_empty() && ui.small_button(t("Clear", "清除")).clicked() {
                 self.filter.clear();
             }
             // Framed in every state: an unframed idle chip grows by its
             // stroke on hover and shifts the row by a pixel.
             let active = self.settings.table.active_only;
             if ui
-                .add(egui::Button::selectable(active, "Active").frame_when_inactive(true))
-                .on_hover_text("Only processes moving data right now")
+                .add(
+                    egui::Button::selectable(active, t("Active", "活跃")).frame_when_inactive(true),
+                )
+                .on_hover_text(t(
+                    "Only processes moving data right now",
+                    "仅显示当前有数据传输的进程",
+                ))
                 .clicked()
             {
                 self.settings.table.active_only = !active;
                 self.save_settings();
             }
             if shown != total {
-                ui.weak(format!("{shown} of {total}"));
+                ui.weak(tf(
+                    "{shown} of {total}",
+                    "{shown} / {total}",
+                    &[("shown", &shown.to_string()), ("total", &total.to_string())],
+                ));
             }
         });
         ui.add_space(2.0);
@@ -1597,7 +1753,7 @@ impl ThrottleApp {
         row.set_selected(selected);
         for &column in columns {
             let content = match column {
-                TableColumn::Name => egui::RichText::new(&stats.name),
+                TableColumn::Name => egui::RichText::new(appnames::display(&stats.exe_path)),
                 TableColumn::Flows => egui::RichText::new(stats.flow_count.to_string()),
                 TableColumn::Down => self.numeric(
                     egui::RichText::new(humanize_rate(stats.down_rate)).color(self.accents.down),
@@ -1626,10 +1782,15 @@ impl ThrottleApp {
                 }
             };
             row.col(|ui| {
-                egui::Label::new(content)
+                let response = egui::Label::new(content)
                     .wrap_mode(egui::TextWrapMode::Truncate)
                     .selectable(false)
                     .ui(ui);
+                // The friendly name can hide the executable, so hovering it
+                // names the real file.
+                if matches!(column, TableColumn::Name) {
+                    response.on_hover_text(&stats.exe_path);
+                }
             });
         }
 
@@ -1642,28 +1803,38 @@ impl ThrottleApp {
             // attribute, so it gets no rule actions.
             if !is_shapable(key) {
                 ui.label(
-                    egui::RichText::new("Unattributed traffic cannot be limited")
-                        .weak()
-                        .italics(),
+                    egui::RichText::new(t(
+                        "Unattributed traffic cannot be limited",
+                        "未归属流量无法限速",
+                    ))
+                    .weak()
+                    .italics(),
                 );
                 return;
             }
             // System is shapable, but covers more than people expect.
             if is_system(key) {
                 ui.label(
-                    egui::RichText::new(
+                    egui::RichText::new(t(
                         "Kernel traffic: includes VPN tunnels, network shares and Windows Update",
-                    )
+                        "内核流量：包括 VPN 隧道、网络共享和 Windows 更新",
+                    ))
                     .weak()
                     .small(),
                 );
                 ui.separator();
             }
-            if ui.button("Set download limit\u{2026}").clicked() {
+            if ui
+                .button(t("Set download limit\u{2026}", "设置下载限速…"))
+                .clicked()
+            {
                 self.open_limit_modal(key, name, Direction::Down);
                 ui.close();
             }
-            if ui.button("Set upload limit\u{2026}").clicked() {
+            if ui
+                .button(t("Set upload limit\u{2026}", "设置上传限速…"))
+                .clicked()
+            {
                 self.open_limit_modal(key, name, Direction::Up);
                 ui.close();
             }
@@ -1675,27 +1846,27 @@ impl ThrottleApp {
                 .map(|r| r.blocked)
                 .unwrap_or(false);
             if blocked {
-                if ui.button("Unblock").clicked() {
+                if ui.button(t("Unblock", "取消屏蔽")).clicked() {
                     self.set_blocked(key, false);
                     ui.close();
                 }
-            } else if ui.button("Block").clicked() {
+            } else if ui.button(t("Block", "屏蔽")).clicked() {
                 self.set_blocked(key, true);
                 ui.close();
             }
             ui.separator();
             if let Some(rule) = self.last_snapshot.rules.get(key) {
                 let (label, disable) = if rule.disabled {
-                    ("Enable rule", false)
+                    (t("Enable rule", "启用规则"), false)
                 } else {
-                    ("Disable rule", true)
+                    (t("Disable rule", "停用规则"), true)
                 };
                 if ui.button(label).clicked() {
                     self.set_rule_disabled(key, disable);
                     ui.close();
                 }
             }
-            if ui.button("Remove rule").clicked() {
+            if ui.button(t("Remove rule", "移除规则")).clicked() {
                 let _ = self.cmd_tx.send(Command::RemoveRule(key.to_string()));
                 ui.close();
             }
@@ -1707,24 +1878,28 @@ impl ThrottleApp {
             return;
         };
 
-        let dir_label = match modal.direction {
-            Direction::Down => "download",
-            Direction::Up => "upload",
+        let title = match modal.direction {
+            Direction::Down => t("Set download limit", "设置下载限速"),
+            Direction::Up => t("Set upload limit", "设置上传限速"),
         };
 
         let mut open = true;
         let mut apply = false;
         let mut cancel = false;
 
-        egui::Window::new(format!("Set {dir_label} limit"))
+        egui::Window::new(title)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.label(format!("Process: {}", modal.name));
+                ui.label(tf(
+                    "Process: {name}",
+                    "进程：{name}",
+                    &[("name", &modal.name)],
+                ));
                 ui.label(
-                    egui::RichText::new("Leave empty for unlimited.")
+                    egui::RichText::new(t("Leave empty for unlimited.", "留空表示不限速。"))
                         .weak()
                         .small(),
                 );
@@ -1741,7 +1916,7 @@ impl ThrottleApp {
                             .desired_width(80.0)
                             .min_size(egui::vec2(0.0, button_height))
                             .vertical_align(egui::Align::Center)
-                            .hint_text("e.g. 2"),
+                            .hint_text(t("e.g. 2", "例如 2")),
                     );
                     if resp.changed() {
                         modal.value = numeric_input(&modal.value);
@@ -1762,10 +1937,10 @@ impl ThrottleApp {
                 }
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Apply").clicked() {
+                    if ui.button(t("Apply", "应用")).clicked() {
                         apply = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(t("Cancel", "取消")).clicked() {
                         cancel = true;
                     }
                 });
@@ -1785,7 +1960,13 @@ impl ThrottleApp {
                         Some((v * modal.unit.multiplier()) as u64)
                     }
                     _ => {
-                        modal.error = Some("Enter a plain number, e.g. 2 or 0.5".to_string());
+                        modal.error = Some(
+                            t(
+                                "Enter a plain number, e.g. 2 or 0.5",
+                                "请输入普通数字，例如 2 或 0.5",
+                            )
+                            .to_string(),
+                        );
                         self.limit_modal = Some(modal);
                         return;
                     }
@@ -2097,31 +2278,44 @@ fn open_path(path: &std::path::Path) {
 
 pub struct ErrorApp {
     message: String,
+    /// This window is built without a `CreationContext`, so it cannot install
+    /// the fonts in `new`; the first frame does it instead, before any label
+    /// that may be Chinese is laid out.
+    fonts_installed: bool,
 }
 
 impl ErrorApp {
     pub fn new(message: String) -> Self {
-        Self { message }
+        Self {
+            message,
+            fonts_installed: false,
+        }
     }
 }
 
 impl eframe::App for ErrorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if !self.fonts_installed {
+            self.fonts_installed = true;
+            crate::fonts::install(ui.ctx());
+        }
         egui::CentralPanel::default().show(ui, |ui| {
             ui.add_space(16.0);
             ui.vertical_centered(|ui| {
-                ui.heading("Throttle could not start");
+                ui.heading(t("Throttle could not start", "Throttle 无法启动"));
             });
             ui.add_space(12.0);
-            ui.label(
+            ui.label(t(
                 "The backend failed to initialize. This usually means the app is not \
                  running as Administrator, or the WinDivert driver files \
                  (WinDivert.dll / WinDivert64.sys) are missing next to the executable.",
-            );
+                "后端初始化失败。通常是因为应用未以管理员身份运行，或可执行文件旁缺少 \
+                 WinDivert 驱动文件（WinDivert.dll / WinDivert64.sys）。",
+            ));
             ui.add_space(8.0);
             ui.separator();
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Details:").strong());
+            ui.label(egui::RichText::new(t("Details:", "详细信息：")).strong());
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.label(
                     egui::RichText::new(&self.message)
@@ -2131,7 +2325,7 @@ impl eframe::App for ErrorApp {
             });
             ui.add_space(12.0);
             ui.separator();
-            if ui.button("Close").clicked() {
+            if ui.button(t("Close", "关闭")).clicked() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
             }
         });
@@ -2227,7 +2421,6 @@ mod tests {
     #[test]
     fn filter_matches_name_or_path_ignoring_case() {
         let stats = ProcessStats {
-            name: "Chrome.exe".to_string(),
             exe_path: "c:\\program files\\google\\chrome.exe".to_string(),
             ..ProcessStats::default()
         };

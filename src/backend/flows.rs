@@ -29,7 +29,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 
 use super::sockets::{SocketSnapshot, query_socket_tables, resolve_pid_path};
-use super::synthetic::{UNKNOWN_EXE, display_name};
+use super::synthetic::UNKNOWN_EXE;
 use crate::types::{HISTORY_LEN, ProcessStats};
 
 /// Key of the port-owner fallback map: `(protocol, is_ipv6, local port)`. The
@@ -333,7 +333,6 @@ impl FlowTable {
                 ProcessStats {
                     pid: c.pid,
                     exe_path: exe.clone(),
-                    name: display_name(exe),
                     down_rate,
                     up_rate,
                     down_total: c.down_total,
@@ -510,7 +509,6 @@ mod tests {
         t.add_unattributed(4000, 500);
         let (procs, td, tu) = t.snapshot();
         let s = procs.get(UNKNOWN_EXE).unwrap();
-        assert_eq!(s.name, "Unknown");
         assert_eq!(s.down_rate, 4000);
         assert_eq!(s.up_rate, 500);
         // Unattributed traffic is part of the link totals.
@@ -531,7 +529,6 @@ mod tests {
         assert_eq!(s.down_history, vec![1000]);
         assert_eq!(td, 1000);
         assert_eq!(tu, 200);
-        assert_eq!(s.name, "a.exe");
 
         // Second interval: accumulators reset, totals accumulate, history grows.
         t.add_bytes("a.exe", 500, 0);

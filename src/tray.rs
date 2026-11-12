@@ -5,7 +5,9 @@ use eframe::egui;
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
+use crate::appnames;
 use crate::gui::rule_summary;
+use crate::i18n::{t, tf};
 use crate::types::Snapshot;
 use crate::units::humanize_rate;
 use crate::{icon, theme};
@@ -104,8 +106,13 @@ pub fn create_tray(ctx: &egui::Context, tx: Sender<TrayAction>) -> Option<TrayIc
 /// the two entries it always had.
 pub fn menu(rules: &[TrayRule]) -> Menu {
     let menu = Menu::new();
-    let show = MenuItem::with_id(TRAY_SHOW_ID, "Show Throttle", true, None);
-    let exit = MenuItem::with_id(TRAY_EXIT_ID, "Exit", true, None);
+    let show = MenuItem::with_id(
+        TRAY_SHOW_ID,
+        t("Show Throttle", "显示 Throttle"),
+        true,
+        None,
+    );
+    let exit = MenuItem::with_id(TRAY_EXIT_ID, t("Exit", "退出"), true, None);
     let mut result = menu.append_items(&[&show, &PredefinedMenuItem::separator()]);
     if !rules.is_empty() {
         for rule in rules.iter().take(TRAY_RULE_LIMIT) {
@@ -115,7 +122,15 @@ pub fn menu(rules: &[TrayRule]) -> Menu {
         }
         if rules.len() > TRAY_RULE_LIMIT {
             let more = rules.len() - TRAY_RULE_LIMIT;
-            let note = MenuItem::new(format!("{more} more in the window"), false, None);
+            let note = MenuItem::new(
+                tf(
+                    "{count} more in the window",
+                    "另外 {count} 个在主窗口中",
+                    &[("count", &more.to_string())],
+                ),
+                false,
+                None,
+            );
             result = result.and(menu.append(&note));
         }
         result = result.and(menu.append(&PredefinedMenuItem::separator()));
@@ -127,25 +142,25 @@ pub fn menu(rules: &[TrayRule]) -> Menu {
     menu
 }
 
-/// The rule toggles for the tray menu, by process name. A rule whose
-/// process is not running is named after its executable; one that neither
-/// limits nor blocks has nothing to switch and is left out.
+/// The rule toggles for the tray menu, by friendly process name. A rule
+/// whose executable has no friendly name is named after the file; one that
+/// neither limits nor blocks has nothing to switch and is left out.
 pub fn rules(snap: &Snapshot) -> Vec<TrayRule> {
     let mut rules: Vec<TrayRule> = snap
         .rules
         .values()
         .filter(|r| r.blocked || r.down_limit.is_some() || r.up_limit.is_some())
         .map(|rule| {
-            let name = snap
-                .processes
-                .get(&rule.exe_path)
-                .map(|p| p.name.clone())
-                .unwrap_or_else(|| exe_name(&rule.exe_path));
+            let name = appnames::display(&rule.exe_path);
             let mut active = rule.clone();
             active.disabled = false;
             TrayRule {
                 key: rule.exe_path.clone(),
-                label: format!("{name}: {}", rule_summary(Some(&active))),
+                label: tf(
+                    "{name}: {summary}",
+                    "{name}：{summary}",
+                    &[("name", &name), ("summary", &rule_summary(Some(&active)))],
+                ),
                 active: !rule.disabled,
             }
         })
@@ -156,20 +171,14 @@ pub fn rules(snap: &Snapshot) -> Vec<TrayRule> {
 
 /// The tray tooltip: the live download and upload totals.
 pub fn tooltip(snap: &Snapshot) -> String {
-    format!(
-        "Throttle\nDown {}\nUp {}",
-        humanize_rate(snap.total_down_rate),
-        humanize_rate(snap.total_up_rate)
+    tf(
+        "Throttle\nDown {down}\nUp {up}",
+        "Throttle\n下载 {down}\n上传 {up}",
+        &[
+            ("down", &humanize_rate(snap.total_down_rate)),
+            ("up", &humanize_rate(snap.total_up_rate)),
+        ],
     )
-}
-
-/// The file name of an exe path, or the path itself if it has none.
-fn exe_name(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| path.to_string())
 }
 
 /// Tray icon pixels for `accents`. The stock accents keep the stock icon,
@@ -206,7 +215,6 @@ mod tests {
         snap.processes.insert(
             steam.clone(),
             ProcessStats {
-                name: "Steam.exe".to_string(),
                 exe_path: steam.clone(),
                 ..ProcessStats::default()
             },
@@ -241,7 +249,8 @@ mod tests {
         assert_eq!(rules[0].label, "curl.exe: BLOCKED");
         assert!(rules[0].active);
         // Disabled rules still show what they would do, unchecked.
-        assert_eq!(rules[1].label, "Steam.exe: Dn 1.00 MB/s");
+        // The friendly name replaces the file name in the menu label.
+        assert_eq!(rules[1].label, "Steam: Dn 1.00 MB/s");
         assert!(!rules[1].active);
         assert_eq!(rules[1].key, steam);
     }

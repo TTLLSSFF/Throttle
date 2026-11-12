@@ -11,9 +11,13 @@
 )]
 
 mod appearance;
+mod appnames;
+mod appnames_data;
 mod autostart;
 mod backend;
+mod fonts;
 mod gui;
+mod i18n;
 mod icon;
 mod plot;
 mod settings;
@@ -133,6 +137,8 @@ fn main() -> eframe::Result {
     }
 
     let settings = settings::load();
+    // Everything drawn from here on reads the language from this global.
+    i18n::set_language(settings.language);
     // The startup task passes --tray; "Start minimised" covers manual launches.
     // A relaunch after an in-app update (--wait-pid) always shows the window,
     // so the user sees the update finish.

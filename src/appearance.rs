@@ -10,6 +10,7 @@ use eframe::egui::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::t;
 use crate::theme::{self, Accents};
 
 /// Corner rounding of widgets, windows and menus.
@@ -219,7 +220,9 @@ fn font_id() -> Id {
 }
 
 /// Switch the UI font family, remembering what was installed so that the
-/// default never calls `set_fonts` (which compares the font data).
+/// default never calls `set_fonts` (which compares the font data). The Chinese
+/// fallback goes last, so localised labels and Chinese process names render in
+/// both families.
 fn apply_font(ctx: &egui::Context, font: Font) {
     let current = ctx
         .data(|d| d.get_temp::<Font>(font_id()))
@@ -236,6 +239,7 @@ fn apply_font(ctx: &egui::Context, font: Font) {
             .unwrap_or_default();
         fonts.families.insert(FontFamily::Proportional, mono);
     }
+    crate::fonts::add_fallback(&mut fonts);
     ctx.set_fonts(fonts);
     ctx.data_mut(|d| d.insert_temp(font_id(), font));
 }
@@ -252,8 +256,10 @@ pub fn customise_ui(ui: &mut Ui, a: &mut Appearance) -> bool {
         .num_columns(2)
         .spacing([12.0, 8.0])
         .show(ui, |ui| {
-            ui.label("Corners")
-                .on_hover_text("How rounded buttons, menus and windows are.");
+            ui.label(t("Corners", "圆角样式")).on_hover_text(t(
+                "How rounded buttons, menus and windows are.",
+                "按钮、菜单和窗口的圆角程度。",
+            ));
             ui.horizontal(|ui| {
                 for c in Corners::ALL {
                     changed |= ui
@@ -263,8 +269,10 @@ pub fn customise_ui(ui: &mut Ui, a: &mut Appearance) -> bool {
             });
             ui.end_row();
 
-            ui.label("Density")
-                .on_hover_text("Spacing between widgets and the height of table rows.");
+            ui.label(t("Density", "密度")).on_hover_text(t(
+                "Spacing between widgets and the height of table rows.",
+                "控件之间的间距和表格行高。",
+            ));
             ui.horizontal(|ui| {
                 for d in Density::ALL {
                     changed |= ui
@@ -274,8 +282,10 @@ pub fn customise_ui(ui: &mut Ui, a: &mut Appearance) -> bool {
             });
             ui.end_row();
 
-            ui.label("Scale")
-                .on_hover_text("Size of everything in the window.");
+            ui.label(t("Scale", "缩放")).on_hover_text(t(
+                "Size of everything in the window.",
+                "窗口中所有内容的大小。",
+            ));
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     for step in SCALE_STEPS {
@@ -287,12 +297,17 @@ pub fn customise_ui(ui: &mut Ui, a: &mut Appearance) -> bool {
                         }
                     }
                 });
-                ui.weak("Ctrl + and Ctrl - also zoom; the setting is remembered.");
+                ui.weak(t(
+                    "Ctrl + and Ctrl - also zoom; the setting is remembered.",
+                    "Ctrl + 和 Ctrl - 也可以缩放；该设置会被记住。",
+                ));
             });
             ui.end_row();
 
-            ui.label("Font")
-                .on_hover_text("The typeface used for the whole window.");
+            ui.label(t("Font", "字体")).on_hover_text(t(
+                "The typeface used for the whole window.",
+                "整个窗口使用的字体。",
+            ));
             ui.horizontal(|ui| {
                 for f in Font::ALL {
                     changed |= ui.radio_value(&mut a.font, f, font_label(f)).changed();
@@ -300,33 +315,48 @@ pub fn customise_ui(ui: &mut Ui, a: &mut Appearance) -> bool {
             });
             ui.end_row();
 
-            ui.label("Details");
+            ui.label(t("Details", "细节"));
             ui.vertical(|ui| {
                 changed |= ui
-                    .checkbox(&mut a.shadows, "Shadows")
-                    .on_hover_text("Drop shadows under menus, popups and windows.")
+                    .checkbox(&mut a.shadows, t("Shadows", "阴影"))
+                    .on_hover_text(t(
+                        "Drop shadows under menus, popups and windows.",
+                        "菜单、弹出窗口和窗口的投影。",
+                    ))
                     .changed();
                 changed |= ui
-                    .checkbox(&mut a.stripes, "Table stripes")
-                    .on_hover_text("Shade every other row of the process table.")
+                    .checkbox(&mut a.stripes, t("Table stripes", "隔行变色"))
+                    .on_hover_text(t(
+                        "Shade every other row of the process table.",
+                        "为进程表格的隔行添加底色。",
+                    ))
                     .changed();
                 changed |= ui
-                    .checkbox(&mut a.button_frames, "Button frames")
-                    .on_hover_text("Draw a frame around buttons; off shows flat text buttons.")
+                    .checkbox(&mut a.button_frames, t("Button frames", "按钮边框"))
+                    .on_hover_text(t(
+                        "Draw a frame around buttons; off shows flat text buttons.",
+                        "为按钮绘制边框；关闭后显示无边框的纯文字按钮。",
+                    ))
                     .changed();
                 changed |= ui
-                    .checkbox(&mut a.numbers_monospace, "Monospace numbers")
-                    .on_hover_text("Line up the rate and total columns in a fixed width font.")
+                    .checkbox(&mut a.numbers_monospace, t("Monospace numbers", "等宽数字"))
+                    .on_hover_text(t(
+                        "Line up the rate and total columns in a fixed width font.",
+                        "用等宽字体对齐速率和总量列。",
+                    ))
                     .changed();
             });
             ui.end_row();
 
-            ui.label("Accents");
+            ui.label(t("Accents", "强调色"));
             ui.vertical(|ui| {
                 let mut custom = a.accent_override.is_some();
                 if ui
-                    .checkbox(&mut custom, "Custom accents")
-                    .on_hover_text("Pick your own download, upload and blocked colours.")
+                    .checkbox(&mut custom, t("Custom accents", "自定义强调色"))
+                    .on_hover_text(t(
+                        "Pick your own download, upload and blocked colours.",
+                        "自定义下载、上传和已屏蔽的颜色。",
+                    ))
                     .changed()
                 {
                     a.accent_override = custom.then(|| {
@@ -337,9 +367,9 @@ pub fn customise_ui(ui: &mut Ui, a: &mut Appearance) -> bool {
                 }
                 if let Some(o) = a.accent_override.as_mut() {
                     for ((label, value), stock) in [
-                        ("Download", &mut o.down),
-                        ("Upload", &mut o.up),
-                        ("Blocked", &mut o.block),
+                        (t("Download", "下载"), &mut o.down),
+                        (t("Upload", "上传"), &mut o.up),
+                        (t("Blocked", "已屏蔽"), &mut o.block),
                     ]
                     .into_iter()
                     .zip(STOCK_ACCENTS)
@@ -362,8 +392,8 @@ pub fn customise_ui(ui: &mut Ui, a: &mut Appearance) -> bool {
 
     ui.separator();
     if ui
-        .button("Reset to defaults")
-        .on_hover_text("Go back to the stock look.")
+        .button(t("Reset to defaults", "恢复默认"))
+        .on_hover_text(t("Go back to the stock look.", "恢复原始外观。"))
         .clicked()
         && *a != Appearance::default()
     {
@@ -373,27 +403,30 @@ pub fn customise_ui(ui: &mut Ui, a: &mut Appearance) -> bool {
     changed
 }
 
+/// The radio label of a corner preset, in the active language.
 fn corners_label(c: Corners) -> &'static str {
     match c {
-        Corners::None => "Square",
-        Corners::Subtle => "Subtle",
-        Corners::Round => "Round",
-        Corners::Pill => "Pill",
+        Corners::None => t("Square", "直角"),
+        Corners::Subtle => t("Subtle", "微圆"),
+        Corners::Round => t("Round", "圆角"),
+        Corners::Pill => t("Pill", "胶囊"),
     }
 }
 
+/// The radio label of a density preset, in the active language.
 fn density_label(d: Density) -> &'static str {
     match d {
-        Density::Compact => "Compact",
-        Density::Normal => "Normal",
-        Density::Spacious => "Spacious",
+        Density::Compact => t("Compact", "紧凑"),
+        Density::Normal => t("Normal", "标准"),
+        Density::Spacious => t("Spacious", "宽松"),
     }
 }
 
+/// The radio label of a font family, in the active language.
 fn font_label(f: Font) -> &'static str {
     match f {
-        Font::Default => "Default",
-        Font::Monospace => "Monospace",
+        Font::Default => t("Default", "默认"),
+        Font::Monospace => t("Monospace", "等宽"),
     }
 }
 
