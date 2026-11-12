@@ -1,0 +1,5 @@
+# Keep shell entry points runnable by Git Bash on Windows and by the release
+# workflow, and keep the NSIS sources byte-identical to the BOM-checked files.
+*.sh text eol=lf
+*.nsi text eol=lf
+*.yml text eol=lf

@@ -64,12 +64,19 @@ https://github.com/user-attachments/assets/9413bec4-a48a-41c2-9e75-7e6207d80d4f
 
 Prebuilt Windows binaries are available on the
 [Releases page](https://github.com/FrancescoCoding/Throttle/releases).
-Grab the latest `Throttle-vX.Y.Z-windows-x64-setup.exe` and run it to install
-Throttle into `%ProgramFiles%\Throttle`, or use the portable
-`Throttle-vX.Y.Z-windows-x64.zip`: extract it anywhere and run `throttle.exe`.
-The WinDivert driver files are included either way, so no extra setup is
-needed. Windows will show a UAC prompt because the app needs administrator
-rights (see below).
+Three builds are published for each release:
+
+- `Throttle-vX.Y.Z-windows-x64-setup.exe` — run it to install Throttle into
+  `%ProgramFiles%\Throttle`.
+- `Throttle-vX.Y.Z-windows-x64.zip` — extract it anywhere and run `throttle.exe`.
+- `Throttle-vX.Y.Z-windows-x64-portable.exe` — a single-file launcher for people
+  who do not want an installer. On first run it unpacks the app and the
+  WinDivert files into `%LOCALAPPDATA%\Throttle\portable\<version>` and starts
+  Throttle; later runs reuse that copy.
+
+The WinDivert driver files are included in every build, so no extra setup is
+needed. Every artifact has a matching `.sha256` file. Windows will show a UAC
+prompt because the app needs administrator rights (see below).
 
 ## Screenshots
 
@@ -121,17 +128,25 @@ Then launch it:
 target\release\throttle.exe
 ```
 
-### Installer
+### Release artifacts
 
-The setup executable is built with NSIS 3. Stage the release binary and the two
-WinDivert files, then compile `installer/Throttle.nsi`:
+NSIS 3 is required for the setup and the single-file portable launcher
+(`makensis` on `PATH`, in the default install location, or pointed at with
+`NSIS_MAKENSIS`). Build all three release files, each with a `.sha256`:
 
 ```bash
-./installer/build-installer.sh
+./installer/build-all.sh
 ```
 
-This writes `dist/Throttle-v<version>-windows-x64-setup.exe` together with its
-`.sha256`. See [installer/README.md](installer/README.md) for details.
+- `dist/Throttle-v<version>-windows-x64-setup.exe` — NSIS installer
+- `dist/Throttle-v<version>-windows-x64.zip` — portable folder archive
+- `dist/Throttle-v<version>-windows-x64-portable.exe` — single-file launcher
+
+Individual entry points are `./installer/build-installer.sh`,
+`./installer/build-zip.sh` and `./installer/build-portable.sh`. The release
+workflow (`.github/workflows/release.yml`) runs `build-all.sh` for every `v*`
+tag and uploads the three files plus checksums to the GitHub release. See
+[installer/README.md](installer/README.md) for details.
 
 ## Administrator requirement
 

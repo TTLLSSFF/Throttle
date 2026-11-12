@@ -1,0 +1,76 @@
+name: Release
+
+# Builds the three Windows artifacts (NSIS setup, portable zip and the
+# single-file portable launcher) and publishes them with their .sha256 files on
+# the GitHub release for a tag. Manual runs need an existing tag whose name
+# matches the version in Cargo.toml (for example v0.2.1).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (must match Cargo.toml, e.g. v0.2.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Ensure NSIS is available
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\NSIS\makensis.exe")) {
+            choco install nsis --yes --no-progress
+          }
+
+      - name: Check the tag matches Cargo.toml
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          if [[ "$RELEASE_TAG" != "v$version" ]]; then
+            echo "::error::tag '$RELEASE_TAG' does not match Cargo.toml version 'v$version'"
+            exit 1
+          fi
+
+      - name: Build installer, zip and single-file portable
+        shell: bash
+        run: bash installer/build-all.sh
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Throttle ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/Throttle-*-windows-x64-setup.exe
+            dist/Throttle-*-windows-x64-setup.exe.sha256
+            dist/Throttle-*-windows-x64.zip
+            dist/Throttle-*-windows-x64.zip.sha256
+            dist/Throttle-*-windows-x64-portable.exe
+            dist/Throttle-*-windows-x64-portable.exe.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
