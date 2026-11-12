@@ -2,8 +2,9 @@ name: Release
 
 # Builds the three Windows artifacts (NSIS setup, portable zip and the
 # single-file portable launcher) and publishes them with their .sha256 files on
-# the GitHub release for a tag. Manual runs need an existing tag whose name
-# matches the version in Cargo.toml (for example v0.2.1).
+# the GitHub release. Pushing a v* tag releases that tag. A manual run builds the
+# selected branch and creates the tag/release at that commit when the tag does
+# not exist yet; an existing tag must point at the commit being built.
 
 on:
   push:
@@ -12,8 +13,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (must match Cargo.toml, e.g. v0.2.1)"
-        required: true
+        description: "Release tag (optional; defaults to v<Cargo.toml version>)"
+        required: false
         type: string
 
 permissions:
@@ -28,8 +29,29 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve release tag
+        id: meta
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          tag="${INPUT_TAG:-}"
+          if [[ -z "$tag" ]]; then
+            if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+              tag="$GITHUB_REF_NAME"
+            else
+              tag="v$version"
+            fi
+          fi
+          if [[ "$tag" != "v$version" ]]; then
+            echo "::error::tag '$tag' does not match Cargo.toml version 'v$version'"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -42,17 +64,26 @@ jobs:
             choco install nsis --yes --no-progress
           }
 
-      - name: Check the tag matches Cargo.toml
+      - name: Reject a tag that points at another commit
         shell: bash
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          TAG: ${{ steps.meta.outputs.tag }}
         run: |
           set -euo pipefail
-          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
-          if [[ "$RELEASE_TAG" != "v$version" ]]; then
-            echo "::error::tag '$RELEASE_TAG' does not match Cargo.toml version 'v$version'"
+          direct="$(git ls-remote --tags origin "refs/tags/$TAG" | head -n1 | awk '{print $1}')"
+          if [[ -z "$direct" ]]; then
+            echo "tag $TAG does not exist yet; the release step will create it at this commit"
+            exit 0
+          fi
+          peeled="$(git ls-remote --tags origin "refs/tags/$TAG^{}" | head -n1 | awk '{print $1}')"
+          target="${peeled:-$direct}"
+          head="$(git rev-parse HEAD)"
+          if [[ "$target" != "$head" ]]; then
+            echo "::error::tag $TAG points to $target, but this run builds $head"
+            echo "::error::check out that tag, delete the old tag, or dispatch from the tagged commit"
             exit 1
           fi
+          echo "tag $TAG already points to $head"
 
       - name: Build installer, zip and single-file portable
         shell: bash
@@ -61,8 +92,9 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          name: Throttle ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Throttle ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |

@@ -64,7 +64,9 @@ root.
 and uploads them with their checksums to the GitHub release when:
 
 - a tag matching `v*` is pushed, or
-- the workflow is started manually with a tag that already exists.
+- the workflow is started manually. A manual run builds the selected branch; the
+  tag is created at that commit when it does not exist yet. If the tag already
+  exists it must point at the same commit, otherwise the run stops.
 
 The tag must equal `v` plus the `Cargo.toml` version (for example `v0.2.1`),
 otherwise the workflow stops before building. The release contains the setup,

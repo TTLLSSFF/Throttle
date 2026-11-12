@@ -145,7 +145,9 @@ NSIS 3 is required for the setup and the single-file portable launcher
 Individual entry points are `./installer/build-installer.sh`,
 `./installer/build-zip.sh` and `./installer/build-portable.sh`. The release
 workflow (`.github/workflows/release.yml`) runs `build-all.sh` for every `v*`
-tag and uploads the three files plus checksums to the GitHub release. See
+tag and uploads the three files plus checksums to the GitHub release. A manual
+run builds the selected branch and creates the tag at that commit when it does
+not exist. See
 [installer/README.md](installer/README.md) for details.
 
 ## Administrator requirement
