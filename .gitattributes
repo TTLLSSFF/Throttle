@@ -2,4 +2,5 @@
 # workflow, and keep the NSIS sources byte-identical to the BOM-checked files.
 *.sh text eol=lf
 *.nsi text eol=lf
+*.nsh text eol=lf
 *.yml text eol=lf

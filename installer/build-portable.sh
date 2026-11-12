@@ -22,7 +22,7 @@ mkdir -p "$DIST"
 
 out="$DIST/Throttle-v${VERSION}-windows-x64-portable.exe"
 echo "==> compiling portable launcher"
-MSYS2_ARG_CONV_EXCL='*' "$NSIS" /V2 /NOCD \
+MSYS2_ARG_CONV_EXCL='*' "$NSIS" /V2 \
   "/DVERSION=$VERSION" \
   "/DSOURCE_DIR=$(winpath "$STAGE")" \
   "/DOUT_FILE=$(winpath "$out")" \

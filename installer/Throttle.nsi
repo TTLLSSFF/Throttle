@@ -9,6 +9,7 @@
 !include "FileFunc.nsh"
 !include "LogicLib.nsh"
 !include "x64.nsh"
+!include "language.nsh"
 
 !define PRODUCT_NAME "Throttle"
 !define PRODUCT_PUBLISHER "Francesco Gruosso"
@@ -17,8 +18,15 @@
 !define REG_UNINSTALL "Software\Microsoft\Windows\CurrentVersion\Uninstall\Throttle"
 !define REG_APP "Software\Throttle"
 
+Var ThrottleMainName
+Var ThrottleDesktopName
+Var ThrottleUninstallName
+Var ThrottleUninstallLink
+Var ThrottleX64Message
+Var ThrottleDeleteDataMessage
+
 !ifndef VERSION
-  !define VERSION "0.2.1"
+  !define VERSION "0.2.2"
 !endif
 !ifndef SOURCE_DIR
   !define SOURCE_DIR "dist\stage"
@@ -51,7 +59,7 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 Francesco Gruosso"
 !define MUI_UNICON "${ICON_FILE}"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${PRODUCT_EXE}"
 !define MUI_FINISHPAGE_RUN_NOTCHECKED
-!define MUI_FINISHPAGE_LINK "Throttle on GitHub"
+!define MUI_FINISHPAGE_LINK "GitHub"
 !define MUI_FINISHPAGE_LINK_LOCATION "${PRODUCT_WEB_SITE}"
 
 !insertmacro MUI_PAGE_WELCOME
@@ -68,12 +76,6 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 Francesco Gruosso"
 !insertmacro MUI_LANGUAGE "English"
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
-LangString DESC_SEC_MAIN ${LANG_ENGLISH} "Throttle and the WinDivert driver files. Required."
-LangString DESC_SEC_MAIN ${LANG_SIMPCHINESE} "Throttle 主程序和 WinDivert 驱动文件（必需）。"
-LangString DESC_SEC_DESKTOP ${LANG_ENGLISH} "Add a Throttle shortcut to the desktop."
-LangString DESC_SEC_DESKTOP ${LANG_SIMPCHINESE} "在桌面上创建 Throttle 快捷方式。"
-LangString MSG_DELETE_DATA ${LANG_ENGLISH} "Also delete Throttle settings, rules and window layout for this user?"
-LangString MSG_DELETE_DATA ${LANG_SIMPCHINESE} "是否同时删除当前用户的 Throttle 设置、规则和窗口布局？"
 
 Section "Throttle" SEC_MAIN
   SectionIn RO
@@ -95,7 +97,7 @@ Section "Throttle" SEC_MAIN
 
   CreateDirectory "$SMPROGRAMS\Throttle"
   CreateShortCut "$SMPROGRAMS\Throttle\Throttle.lnk" "$INSTDIR\${PRODUCT_EXE}"
-  CreateShortCut "$SMPROGRAMS\Throttle\Uninstall Throttle.lnk" "$INSTDIR\Uninstall.exe"
+  CreateShortCut "$SMPROGRAMS\Throttle\$ThrottleUninstallLink" "$INSTDIR\Uninstall.exe"
 
   WriteRegStr HKLM "${REG_UNINSTALL}" "DisplayName" "${PRODUCT_NAME}"
   WriteRegStr HKLM "${REG_UNINSTALL}" "DisplayVersion" "${VERSION}"
@@ -120,10 +122,27 @@ Section /o "Desktop shortcut" SEC_DESKTOP
   CreateShortCut "$DESKTOP\Throttle.lnk" "$INSTDIR\${PRODUCT_EXE}"
 SectionEnd
 
-!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_MAIN} $(DESC_SEC_MAIN)
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_DESKTOP} $(DESC_SEC_DESKTOP)
-!insertmacro MUI_FUNCTION_DESCRIPTION_END
+Function .onMouseOverSection
+  ${If} $0 == -1
+    SendMessage $mui.ComponentsPage.DescriptionText ${WM_SETTEXT} 0 "STR:"
+    EnableWindow $mui.ComponentsPage.DescriptionText 0
+    SendMessage $mui.ComponentsPage.DescriptionText ${WM_SETTEXT} 0 "STR:$mui.ComponentsPage.DescriptionText.Info"
+  ${ElseIf} $0 == ${SEC_MAIN}
+    EnableWindow $mui.ComponentsPage.DescriptionText 1
+    ${If} $LANGUAGE == ${LANG_SIMPCHINESE}
+      SendMessage $mui.ComponentsPage.DescriptionText ${WM_SETTEXT} 0 "STR:Throttle 主程序和 WinDivert 驱动文件（必需）。"
+    ${Else}
+      SendMessage $mui.ComponentsPage.DescriptionText ${WM_SETTEXT} 0 "STR:Throttle and the WinDivert driver files. Required."
+    ${EndIf}
+  ${ElseIf} $0 == ${SEC_DESKTOP}
+    EnableWindow $mui.ComponentsPage.DescriptionText 1
+    ${If} $LANGUAGE == ${LANG_SIMPCHINESE}
+      SendMessage $mui.ComponentsPage.DescriptionText ${WM_SETTEXT} 0 "STR:在桌面上创建 Throttle 快捷方式。"
+    ${Else}
+      SendMessage $mui.ComponentsPage.DescriptionText ${WM_SETTEXT} 0 "STR:Add a Throttle shortcut to the desktop."
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
 
 Section "Uninstall" SEC_UNINSTALL
   SetShellVarContext all
@@ -146,6 +165,7 @@ Section "Uninstall" SEC_UNINSTALL
 
   Delete "$SMPROGRAMS\Throttle\Throttle.lnk"
   Delete "$SMPROGRAMS\Throttle\Uninstall Throttle.lnk"
+  Delete "$SMPROGRAMS\Throttle\卸载 Throttle.lnk"
   RMDir "$SMPROGRAMS\Throttle"
 
   Delete "$DESKTOP\Throttle.lnk"
@@ -156,38 +176,47 @@ Section "Uninstall" SEC_UNINSTALL
   ; Settings, rules and window layout belong to the user, so never remove them
   ; silently. A silent uninstall leaves them in place.
   IfSilent skip_data_prompt
-  MessageBox MB_YESNO|MB_ICONQUESTION "$(MSG_DELETE_DATA)" IDNO skip_data_prompt
+  MessageBox MB_YESNO|MB_ICONQUESTION "$ThrottleDeleteDataMessage" IDNO skip_data_prompt
   RMDir /r "$APPDATA\Throttle"
   skip_data_prompt:
 SectionEnd
 
 Function .onInit
+  ; Follow the Windows display language. The app itself still offers
+  ; English / 简体中文 in Settings > Language. Detect it before the 64-bit
+  ; check so that message is localized too.
+  !insertmacro THROTTLE_DETECT_LANGUAGE
+
+  ${If} $LANGUAGE == ${LANG_SIMPCHINESE}
+    StrCpy $ThrottleMainName "Throttle 主程序"
+    StrCpy $ThrottleDesktopName "桌面快捷方式"
+    StrCpy $ThrottleUninstallLink "卸载 Throttle.lnk"
+    StrCpy $ThrottleX64Message "Throttle 仅支持 64 位 Windows。"
+  ${Else}
+    StrCpy $ThrottleMainName "Throttle"
+    StrCpy $ThrottleDesktopName "Desktop shortcut"
+    StrCpy $ThrottleUninstallLink "Uninstall Throttle.lnk"
+    StrCpy $ThrottleX64Message "Throttle requires 64-bit Windows."
+  ${EndIf}
+
   ${IfNot} ${RunningX64}
-    MessageBox MB_ICONSTOP|MB_OK "Throttle requires 64-bit Windows.$\r$\nThrottle 仅支持 64 位 Windows。"
+    MessageBox MB_ICONSTOP|MB_OK "$ThrottleX64Message"
     Abort
   ${EndIf}
   SetRegView 64
-
-  ; Follow the Windows display language. The app itself still offers
-  ; English / 简体中文 in Settings > Language.
-  System::Call 'kernel32::GetUserDefaultUILanguage() i .r0'
-  IntOp $1 $0 & 0x3FF
-  ${If} $1 == 0x04
-    StrCpy $LANGUAGE ${LANG_SIMPCHINESE}
-    SectionSetText ${SEC_MAIN} "Throttle 主程序"
-    SectionSetText ${SEC_DESKTOP} "桌面快捷方式"
-  ${Else}
-    StrCpy $LANGUAGE ${LANG_ENGLISH}
-  ${EndIf}
+  SectionSetText ${SEC_MAIN} "$ThrottleMainName"
+  SectionSetText ${SEC_DESKTOP} "$ThrottleDesktopName"
 FunctionEnd
 
 Function un.onInit
   SetRegView 64
-  System::Call 'kernel32::GetUserDefaultUILanguage() i .r0'
-  IntOp $1 $0 & 0x3FF
-  ${If} $1 == 0x04
-    StrCpy $LANGUAGE ${LANG_SIMPCHINESE}
+  !insertmacro THROTTLE_DETECT_LANGUAGE
+  ${If} $LANGUAGE == ${LANG_SIMPCHINESE}
+    StrCpy $ThrottleUninstallName "卸载"
+    StrCpy $ThrottleDeleteDataMessage "是否同时删除当前用户的 Throttle 设置、规则和窗口布局？"
   ${Else}
-    StrCpy $LANGUAGE ${LANG_ENGLISH}
+    StrCpy $ThrottleUninstallName "Uninstall"
+    StrCpy $ThrottleDeleteDataMessage "Also delete Throttle settings, rules and window layout for this user?"
   ${EndIf}
+  SectionSetText ${SEC_UNINSTALL} "$ThrottleUninstallName"
 FunctionEnd

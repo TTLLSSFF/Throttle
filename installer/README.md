@@ -19,8 +19,9 @@ in place. Neither package creates a startup entry: the app registers its own
 "run at login" scheduled task from the tray menu when the user asks for it.
 
 The setup and the portable launcher pick English or Simplified Chinese from the
-Windows display language. The application itself switches language under
-Settings > Language.
+Windows display language. Any Chinese display language selects the Simplified
+Chinese installer; every other language selects English. The application itself
+switches language under Settings > Language.
 
 ## Build
 
@@ -46,7 +47,7 @@ Or build one artifact at a time:
 Each script reads the version from `Cargo.toml`, runs `cargo build --release`,
 stages `throttle.exe`, `WinDivert.dll`, `WinDivert64.sys`, `LICENSE` and
 `THIRD_PARTY_NOTICES.md` in `dist/stage`, and writes the artifact to `dist/`.
-Override the version with `VERSION=0.2.1 ./installer/build-all.sh`.
+Override the version with `VERSION=0.2.2 ./installer/build-all.sh`.
 
 Both `.nsi` files are UTF-8 with BOM and must stay that way: NSIS would decode
 a BOM-less script with the system code page and turn the Chinese strings into
@@ -68,7 +69,7 @@ and uploads them with their checksums to the GitHub release when:
   tag is created at that commit when it does not exist yet. If the tag already
   exists it must point at the same commit, otherwise the run stops.
 
-The tag must equal `v` plus the `Cargo.toml` version (for example `v0.2.1`),
+The tag must equal `v` plus the `Cargo.toml` version (for example `v0.2.2`),
 otherwise the workflow stops before building. The release contains the setup,
 the zip, the portable launcher and the three `.sha256` files.
 

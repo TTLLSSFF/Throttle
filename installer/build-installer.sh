@@ -23,7 +23,7 @@ out="$DIST/Throttle-v${VERSION}-windows-x64-setup.exe"
 echo "==> compiling installer"
 # MSYS would rewrite /V2 and /D... as POSIX paths, so turn that off for this
 # one native command.
-MSYS2_ARG_CONV_EXCL='*' "$NSIS" /V2 /NOCD \
+MSYS2_ARG_CONV_EXCL='*' "$NSIS" /V2 \
   "/DVERSION=$VERSION" \
   "/DSOURCE_DIR=$(winpath "$STAGE")" \
   "/DOUT_FILE=$(winpath "$out")" \

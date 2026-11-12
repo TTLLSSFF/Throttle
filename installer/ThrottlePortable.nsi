@@ -1,5 +1,10 @@
 ﻿Unicode true
 
+; Set the compressor before any file data is compressed.
+SetCompressor /SOLID lzma
+
+!include "language.nsh"
+
 ; Single-file portable launcher. It embeds the app and the WinDivert runtime,
 ; unpacks them into %LOCALAPPDATA%\Throttle\portable\<version> (reusing a
 ; complete extraction so a running instance is never overwritten), then starts
@@ -7,7 +12,7 @@
 ; elevation and Windows shows a single UAC prompt.
 
 !ifndef VERSION
-  !define VERSION "0.0.0"
+  !define VERSION "0.2.2"
 !endif
 !ifndef SOURCE_DIR
   !define SOURCE_DIR "dist\stage"
@@ -22,7 +27,6 @@
 Name "Throttle Portable ${VERSION}"
 OutFile "${OUT_FILE}"
 RequestExecutionLevel admin
-SetCompressor /SOLID lzma
 Icon "${ICON_FILE}"
 
 VIProductVersion "${VERSION}.0"
@@ -34,6 +38,17 @@ VIAddVersionKey "CompanyName" "Francesco Gruosso"
 VIAddVersionKey "LegalCopyright" "MIT"
 
 !define PORTABLE_DIR "$LOCALAPPDATA\Throttle\portable\${VERSION}"
+
+Var ThrottlePortableUnpackFailed
+
+Function .onInit
+  !insertmacro THROTTLE_DETECT_LANGUAGE
+  ${If} $LANGUAGE == ${LANG_SIMPCHINESE}
+    StrCpy $ThrottlePortableUnpackFailed "无法将 Throttle 运行时文件解压到：$\r$\n${PORTABLE_DIR}"
+  ${Else}
+    StrCpy $ThrottlePortableUnpackFailed "Throttle could not unpack its runtime files to:$\r$\n${PORTABLE_DIR}"
+  ${EndIf}
+FunctionEnd
 
 Section "Portable"
   IfFileExists "${PORTABLE_DIR}\throttle.exe" 0 extract
@@ -50,7 +65,7 @@ extract:
   File "${SOURCE_DIR}\LICENSE"
   File "${SOURCE_DIR}\THIRD_PARTY_NOTICES.md"
   IfFileExists "${PORTABLE_DIR}\throttle.exe" launch
-  MessageBox MB_ICONSTOP "Throttle could not unpack its runtime files to:$\r$\n${PORTABLE_DIR}$\r$\n$\r$\n无法解压 Throttle 运行时文件。"
+  MessageBox MB_ICONSTOP "$ThrottlePortableUnpackFailed"
   Quit
 
 launch:
